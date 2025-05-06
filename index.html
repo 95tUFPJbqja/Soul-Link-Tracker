@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Pokémon Soul Link Nuzlocke Tracker</title>
+  <style>
+    :root {
+      --bg: #272822;
+      --text: #f8f8f2;
+      --accent: #66d9ef;
+      --party: #a6e22e;
+      --dead: #f92672;
+      --boxed: #e6db74;
+      --header-bg: #1e1e1c;
+      --row-alt: #3e3d32;
+      --modal-bg: rgba(0, 0, 0, 0.8);
+      --header-height: 4rem;
+      --max-party: 6;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: sans-serif; background: var(--bg); color: var(--text); }
+    header { position: sticky; top: 0; height: var(--header-height); background: var(--header-bg); display: flex; align-items: center; padding: 0 1rem; gap: 0.5rem; z-index: 10; flex-wrap: wrap; }
+    header button, header input, header select { background: var(--bg); color: var(--text); border: 1px solid var(--accent); padding: 0.4rem 0.6rem; }
+    #stats { margin-left: auto; display: flex; gap: 1rem; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 0.5rem; text-align: center; border-bottom: 1px solid var(--header-bg); }
+    th { position: sticky; top: var(--header-height); background: var(--header-bg); z-index: 5; }
+    tr:nth-child(even) { background: var(--row-alt); }
+    button { cursor: pointer; border-radius: 4px; }
+    #modalOverlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: var(--modal-bg); align-items: center; justify-content: center; z-index: 20; }
+    #encounterModal { background: var(--bg); padding: 1rem; border: 1px solid var(--accent); width: 300px; display: flex; flex-direction: column; gap: 0.5rem; }
+    label { display: flex; flex-direction: column; font-size: 0.9rem; }
+    input, select, textarea { background: var(--header-bg); color: var(--text); border: 1px solid var(--accent); padding: 0.3rem; }
+    #modalButtons { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 0.5rem; }
+  </style>
+</head>
+<body>
+  <header>
+    <button id="addBtn">Add Encounter</button>
+    <input id="searchInput" type="text" placeholder="Search...">
+    <select id="statusFilter">
+      <option value="all">All</option>
+      <option value="party">Party</option>
+      <option value="dead">Dead</option>
+      <option value="boxed">Boxed</option>
+    </select>
+    <button id="swapBtn">Swap Pokémon</button>
+    <button id="exportBtn">Export JSON</button>
+    <button id="importBtn">Import JSON</button>
+    <button id="deleteAllBtn">Delete All</button>
+    <input id="importFile" type="file" accept="application/json" style="display:none">
+    <div id="stats">
+      <span id="totalCount">Total: 0</span>
+      <span style="color:var(--party)">Party: <span id="partyCount">0</span></span>
+      <span style="color:var(--dead)">Dead: <span id="deadCount">0</span></span>
+      <span style="color:var(--boxed)">Boxed: <span id="boxedCount">0</span></span>
+    </div>
+  </header>
+  <table>
+    <thead>
+      <tr>
+        <th>Route</th>
+        <th>My Pokémon</th>
+        <th>Friend’s Pokémon</th>
+        <th>Status</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody id="encounterTable"></tbody>
+  </table>
+
+  <div id="modalOverlay">
+    <div id="encounterModal">
+      <h3 id="modalTitle">Add Encounter</h3>
+      <label>Route<input id="routeInput" autocomplete="off"></label>
+      <label>My Pokémon<input id="myInput" autocomplete="off"></label>
+      <label>Friend’s Pokémon<input id="friendInput" autocomplete="off"></label>
+      <label>Status
+        <select id="statusInput">
+          <option value="party">Party</option>
+          <option value="dead">Dead</option>
+          <option value="boxed">Boxed</option>
+        </select>
+      </label>
+      <label>Notes<textarea id="notesInput" rows="3" autocomplete="off"></textarea></label>
+      <div id="modalButtons">
+        <button id="deleteBtn" style="display:none;">Delete</button>
+        <button id="saveBtn">Save</button>
+        <button id="cancelBtn">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let encounters = [];
+    let editIndex = null;
+
+    // Elements
+    const modalOverlay = document.getElementById('modalOverlay');
+    const addBtn = document.getElementById('addBtn');
+    const saveBtn = document.getElementById('saveBtn');
+    const deleteBtn = document.getElementById('deleteBtn');
+    const cancelBtn = document.getElementById('cancelBtn');
+    const exportBtn = document.getElementById('exportBtn');
+    const importBtn = document.getElementById('importBtn');
+    const deleteAllBtn = document.getElementById('deleteAllBtn');
+    const swapBtn = document.getElementById('swapBtn');
+    const importFile = document.getElementById('importFile');
+    const searchInput = document.getElementById('searchInput');
+    const statusFilter = document.getElementById('statusFilter');
+    const routeInput = document.getElementById('routeInput');
+    const myInput = document.getElementById('myInput');
+    const friendInput = document.getElementById('friendInput');
+    const statusInput = document.getElementById('statusInput');
+    const notesInput = document.getElementById('notesInput');
+    const tableBody = document.getElementById('encounterTable');
+    const totalCount = document.getElementById('totalCount');
+    const partyCount = document.getElementById('partyCount');
+    const deadCount = document.getElementById('deadCount');
+    const boxedCount = document.getElementById('boxedCount');
+
+    const maxParty = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--max-party'));
+
+    function saveEncounters() {
+      localStorage.setItem('encounters', JSON.stringify(encounters));
+    }
+
+    function openModal(edit = false, idx = null) {
+      modalOverlay.style.display = 'flex';
+      if (edit) {
+        const e = encounters[idx];
+        editIndex = idx;
+        document.getElementById('modalTitle').textContent = 'Edit Encounter';
+        routeInput.value = e.route;
+        myInput.value = e.my;
+        friendInput.value = e.friend;
+        statusInput.value = e.status;
+        notesInput.value = e.notes;
+        deleteBtn.style.display = 'inline-block';
+      } else {
+        editIndex = null;
+        document.getElementById('modalTitle').textContent = 'Add Encounter';
+        [routeInput, myInput, friendInput, notesInput].forEach(i => i.value = '');
+        const currentParty = encounters.filter(e => e.status === 'party').length;
+        statusInput.value = currentParty >= maxParty ? 'boxed' : 'party';
+        deleteBtn.style.display = 'none';
+      }
+    }
+
+    function closeModal() {
+      modalOverlay.style.display = 'none';
+    }
+
+    function render() {
+      tableBody.innerHTML = '';
+      const filterText = searchInput.value.toLowerCase();
+      const statusVal = statusFilter.value;
+      let counts = { party: 0, dead: 0, boxed: 0 };
+
+      encounters.forEach((e, i) => {
+        if ((e.route.toLowerCase().includes(filterText) || e.my.toLowerCase().includes(filterText) || e.friend.toLowerCase().includes(filterText)) &&
+            (statusVal === 'all' || e.status === statusVal)) {
+          const tr = document.createElement('tr');
+          ['route', 'my', 'friend'].forEach(key => {
+            const td = document.createElement('td');
+            td.textContent = e[key];
+            tr.appendChild(td);
+          });
+          const statusTd = document.createElement('td');
+          statusTd.textContent = e.status;
+          statusTd.style.color = `var(--${e.status})`;
+          tr.appendChild(statusTd);
+
+          const actTd = document.createElement('td');
+          const edit = document.createElement('button');
+          edit.textContent = 'Edit';
+          edit.onclick = () => openModal(true, i);
+          actTd.appendChild(edit);
+          tr.appendChild(actTd);
+
+          tableBody.appendChild(tr);
+          counts[e.status]++;
+        }
+      });
+
+      totalCount.textContent = `Total: ${encounters.length}`;
+      partyCount.textContent = counts.party;
+      deadCount.textContent = counts.dead;
+      boxedCount.textContent = counts.boxed;
+    }
+
+    // Event Listeners
+    addBtn.onclick = () => openModal();
+    cancelBtn.onclick = closeModal;
+
+    saveBtn.onclick = () => {
+      const newE = {
+        route: routeInput.value,
+        my: myInput.value,
+        friend: friendInput.value,
+        status: statusInput.value,
+        notes: notesInput.value
+      };
+      if (editIndex !== null) {
+        encounters.splice(editIndex, 1, newE);
+      } else {
+        encounters.push(newE);
+      }
+      saveEncounters();
+      closeModal();
+      render();
+    };
+
+    deleteBtn.onclick = () => {
+      if (editIndex !== null) {
+        encounters.splice(editIndex, 1);
+        saveEncounters();
+      }
+      closeModal();
+      render();
+    };
+
+    deleteAllBtn.onclick = () => {
+      if (confirm('Clear all encounters?')) {
+        encounters = [];
+        saveEncounters();
+        render();
+      }
+    };
+
+    searchInput.oninput = render;
+    statusFilter.onchange = render;
+
+    exportBtn.onclick = () => {
+      const blob = new Blob([JSON.stringify(encounters, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'encounters.json';
+      a.click();
+      URL.revokeObjectURL(url);
+    };
+
+    importBtn.onclick = () => importFile.click();
+
+    importFile.onchange = e => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          encounters = JSON.parse(reader.result);
+          saveEncounters();
+          render();
+        } catch (err) {
+          alert('Invalid JSON');
+        }
+      };
+      reader.readAsText(file);
+      importFile.value = '';
+    };
+
+    modalOverlay.addEventListener('click', e => {
+      if (e.target === modalOverlay) closeModal();
+    });
+
+    swapBtn.onclick = () => {
+      encounters = encounters.map(e => ({
+        ...e,
+        my: e.friend,
+        friend: e.my
+      }));
+      saveEncounters();
+      render();
+    };
+
+    // Load from localStorage
+    const saved = localStorage.getItem('encounters');
+    if (saved) encounters = JSON.parse(saved);
+
+    render();
+  </script>
+</body>
+</html>
